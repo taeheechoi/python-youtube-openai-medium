@@ -3,22 +3,43 @@ import os
 import textwrap
 from datetime import datetime, timedelta
 
-
 import requests
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi.security import OAuth2PasswordRequestForm
 from googleapiclient import discovery
-from pydantic import BaseModel
+
 from youtube_transcript_api import YouTubeTranscriptApi
 from youtube_transcript_api.formatters import TextFormatter
+from .model import Token,  User, Transcript
+from .auth import authenticate_user, users, create_access_token, get_current_active_user
 
 load_dotenv()
+
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv('ACCESS_TOKEN_EXPIRE_MINUTES'))
 
 app = FastAPI()
 
 
+@app.post("/token", response_model=Token)
+async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends()):
+    user = authenticate_user(
+        users, form_data.username, form_data.password)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(
+        data={"sub": user.username}, expires_delta=access_token_expires
+    )
+    return {"access_token": access_token, "token_type": "bearer"}
+
+
 @app.post("/youtube-videos")
-async def get_youtube_videos(search_params: dict):
+async def get_youtube_videos(search_params: dict, current_user: User = Depends(get_current_active_user)):
     youtube_api_key = os.getenv('YOUTUBE_API_KEY')
 
     default_search_params = {
@@ -54,7 +75,7 @@ async def get_youtube_videos(search_params: dict):
 
 
 @app.post("/transcript/{video_id}")
-async def get_video_transcript(video_id: str):
+async def get_video_transcript(video_id: str, current_user: User = Depends(get_current_active_user)):
     try:
         transcript = YouTubeTranscriptApi.get_transcript(
             video_id)
@@ -70,12 +91,8 @@ async def get_video_transcript(video_id: str):
     }
 
 
-class Transcript(BaseModel):
-    transcript: str
-
-
 @app.post("/summarize-medium")
-async def generate_summaries(transcript: Transcript):
+async def generate_summaries(transcript: Transcript, current_user: User = Depends(get_current_active_user)):
     openai_api_key = os.getenv('OPENAI_API_KEY')
 
     transcript_text = transcript.transcript.strip()

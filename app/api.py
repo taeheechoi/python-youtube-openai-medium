@@ -1,4 +1,3 @@
-import json
 import os
 import textwrap
 from datetime import datetime, timedelta
@@ -7,83 +6,107 @@ import requests
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
-from googleapiclient import discovery
-
+from googleapiclient.discovery import build
+from sqlalchemy.orm import Session
 from youtube_transcript_api import YouTubeTranscriptApi
 from youtube_transcript_api.formatters import TextFormatter
-from .model import Token,  User, Transcript
-from .auth import authenticate_user, users, create_access_token, get_current_active_user
+
+from . import models, services
 
 load_dotenv()
 
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv('ACCESS_TOKEN_EXPIRE_MINUTES'))
 
 app = FastAPI()
 
 
-@app.post("/token", response_model=Token)
-async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends()):
-    user = authenticate_user(
-        users, form_data.username, form_data.password)
+@app.post("/api/users")
+async def create_user(
+    user: models.UserCreate, db: Session = Depends(services.get_db)
+):
+    db_user = await services.get_user_by_email(user.email, db)
+    if db_user:
+        raise HTTPException(
+            status_code=400, detail="Email already in use"
+        )
+
+    user = await services.create_user(user, db)
+    return await services.create_token(user)
+
+
+@app.post("/api/token")
+async def generate_token(
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db: Session = Depends(services.get_db),
+):
+    user = await services.authenticate_user(form_data.username, form_data.password, db)
+
     if not user:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password",
-            headers={"WWW-Authenticate": "Bearer"},
+            status_code=401, detail="Invalid Credentials"
         )
-    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    access_token = create_access_token(
-        data={"sub": user.username}, expires_delta=access_token_expires
-    )
-    return {"access_token": access_token, "token_type": "bearer"}
+
+    return await services.create_token(user)
 
 
-@app.post("/youtube-videos")
-async def get_youtube_videos(search_params: dict, current_user: User = Depends(get_current_active_user)):
-    youtube_api_key = os.getenv('YOUTUBE_API_KEY')
+@app.get("/api/users/my-profile", response_model=models.User)
+async def get_user(user: models.User = Depends(services.get_current_user)):
+    return user
+
+
+@app.post("/api/youtube-videos")
+async def get_youtube_videos(
+    search_params: dict, user: models.User = Depends(services.get_current_user)
+):
+    YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
 
     default_search_params = {
-        'q': '',
-        'type': 'video',
-        'part': 'id,snippet',
-        'order': 'viewCount',
-        'videoCaption': 'closedCaption',
-        'videoDuration': 'medium',
-        'maxResults': 10,
-        'publishedAfter': (datetime.now() - timedelta(days=7)).isoformat() + 'Z'
+        "q": "",
+        "type": "video",
+        "part": "id,snippet",
+        "order": "viewCount",
+        "videoCaption": "closedCaption",
+        "videoDuration": "medium",
+        "maxResults": 10,
+        "publishedAfter": (datetime.now() - timedelta(days=7)).isoformat() + "Z",
     }
 
-    q = search_params.get('q')
+    q = search_params.get("q")
+
     if not q:
         raise HTTPException(
-            status_code=400, detail="Parameter 'q' is required and must not be blank.")
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Parameter 'q' is required and must not be blank."
+        )
 
     default_search_params.update(search_params)
 
-    youtube = discovery.build('youtube', 'v3', developerKey=youtube_api_key)
-
     try:
-        videos = youtube.search().list(**default_search_params).execute()
-        video_ids = [video['id']['videoId'] for video in videos['items']]
+        youtube = build("youtube", "v3", developerKey=YOUTUBE_API_KEY)
+        response = youtube.search().list(**default_search_params).execute()
+        video_ids = [video["id"]["videoId"] for video in response["items"]]
     except Exception as e:
         raise HTTPException(
-            status_code=500, detail="Failed to retrieve YouTube videos")
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve YouTube videos"
+        )
 
     return {
         "video_ids": video_ids
     }
 
 
-@app.post("/transcript/{video_id}")
-async def get_video_transcript(video_id: str, current_user: User = Depends(get_current_active_user)):
+@app.post("/api/transcript/{video_id}")
+async def get_video_transcript(
+    video_id: str, user: models.User = Depends(services.get_current_user)
+):
     try:
-        transcript = YouTubeTranscriptApi.get_transcript(
-            video_id)
+        transcript = YouTubeTranscriptApi.get_transcript(video_id)
         formatter = TextFormatter()
         formatted_transcript = formatter.format_transcript(transcript)
     except Exception as e:
         raise HTTPException(
-            status_code=500, detail="Failed to retrieve video transcript")
+            status_code=500, detail="Failed to retrieve video transcript"
+        )
 
     return {
         "video_id": video_id,
@@ -91,15 +114,18 @@ async def get_video_transcript(video_id: str, current_user: User = Depends(get_c
     }
 
 
-@app.post("/summarize-medium")
-async def generate_summaries(transcript: Transcript, current_user: User = Depends(get_current_active_user)):
-    openai_api_key = os.getenv('OPENAI_API_KEY')
+@app.post("/api/summarize-transcript")
+async def generate_summaries(
+    transcript: models.Transcript, user: models.User = Depends(services.get_current_user)
+):
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
     transcript_text = transcript.transcript.strip()
 
     if not transcript_text:
         raise HTTPException(
-            status_code=400, detail="Transcript cannot be blank.")
+            status_code=400, detail="Transcript cannot be blank."
+        )
 
     chunk_size = 1200 if len(transcript_text) >= 2500 else 2000
 
@@ -110,7 +136,7 @@ async def generate_summaries(transcript: Transcript, current_user: User = Depend
     for chunk in chunks:
         headers = {
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {openai_api_key}"
+            "Authorization": f"Bearer {OPENAI_API_KEY}"
         }
 
         data = {
@@ -126,16 +152,59 @@ async def generate_summaries(transcript: Transcript, current_user: User = Depend
             "presence_penalty": 0
         }
 
-        response = requests.post(
-            "https://api.openai.com/v1/chat/completions", headers=headers, json=data)
-        response_json = json.loads(response.text)
+        try:
+            response = requests.post(
+                "https://api.openai.com/v1/chat/completions", headers=headers, json=data)
+            response.raise_for_status()
 
-        if "error" in response_json:
-            print(f"API error: {response_json['error']}")
-        else:
-            summary = response_json['choices'][0]['message']['content'].strip()
+            response_json = response.json()
+
+            summary = response_json["choices"][0]["message"]["content"].strip()
             summaries.append(summary)
+
+        except requests.exceptions.RequestException as e:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Error occurred while communicating with the OpenAI API"
+            )
 
     return {
         "summary": " ".join(summaries)
     }
+
+
+@app.post("/api/publish-medium")
+async def publish_summaries(summary: models.Summary, user: models.User = Depends(services.get_current_user)):
+    MEDIUM_ID = os.getenv("MEDIUM_ID")
+    MEDIUM_TOKEN = os.getenv("MEDIUM_TOKEN")
+
+    MEDIUM_URL = f"https://api.medium.com/v1/users/{MEDIUM_ID}/posts"
+
+    content = f"{summary}"
+
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {MEDIUM_TOKEN}",
+        "Accept": "application/json",
+    }
+
+    data = {
+        "title": "title",
+        "contentFormat": "markdown",
+        "content": content,
+        "tags": ["Automation", "Food"],
+        "canonicalUrl": "https://medium.com/@taeheechoi",
+        "publishStatus": "draft",
+    }
+
+    try:
+        response = requests.post(MEDIUM_URL, headers=headers, json=data)
+        response.raise_for_status()
+        print(response)
+        return {"message": "Successfully published to Medium"}
+
+    except requests.exceptions.RequestException as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error occurred while communicating with MEDIUM API"
+        )

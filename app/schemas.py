@@ -1,16 +1,32 @@
-from sqlalchemy import Column, Integer, String
-from passlib.context import CryptContext
-from . import database
-
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+from pydantic import BaseModel, EmailStr
 
 
-class User(database.Base):
-    __tablename__ = "users"
-    id = Column(Integer, primary_key=True, index=True)
-    email = Column(String, unique=True, index=True)
-    password = Column(String)
-    full_name = Column(String)
+class UserBase(BaseModel):
+    email: EmailStr
+    full_name: str | None = None
 
-    def verify_password(self, password: str):
-        return pwd_context.verify(password, self.password)
+
+class UserCreate(UserBase):
+    password: str
+
+    class Config:
+        orm_mode = True
+
+
+class User(UserBase):
+    id: int
+
+    class Config:
+        orm_mode = True
+
+
+class Transcript(BaseModel):
+    transcript: str
+    class Config:
+        orm_mode = True
+
+
+class Summary(BaseModel):
+    summary: str
+    class Config:
+        orm_mode = True

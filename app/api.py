@@ -5,43 +5,22 @@ from datetime import datetime, timedelta
 import requests
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from fastapi.security import OAuth2PasswordRequestForm
 from googleapiclient.discovery import build
 from sqlalchemy.orm import Session
 from youtube_transcript_api import YouTubeTranscriptApi
 from youtube_transcript_api.formatters import TextFormatter
 
-from . import database, models, schemas, services
+from . import database, schemas, services
 
 load_dotenv()
 
 database.Base.metadata.create_all(bind=database.engine)
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/token")
-
 
 app = FastAPI()
 
-
-def get_db():
-    db = database.SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-async def get_user_by_token(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
-    try:
-        user = await services.get_current_user(token, db)
-    
-    except Exception as e:
-        raise HTTPException(
-            status_code=500, detail="User is not authorized to use this service."
-        )
-    return user
-
-
 @app.post("/api/users")
-async def create_user(user: schemas.UserCreate, db: Session = Depends(get_db)):
+async def create_user(user: schemas.UserCreate, db: Session = Depends(services.get_db)):
     db_user = await services.get_user_by_email(user.email, db)
     if db_user:
         raise HTTPException(status_code=400, detail="Email already in use")
@@ -51,7 +30,7 @@ async def create_user(user: schemas.UserCreate, db: Session = Depends(get_db)):
 
 
 @app.post("/api/token")
-async def generate_token(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+async def generate_token(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(services.get_db)):
     user = await services.authenticate_user(form_data.username, form_data.password, db)
 
     if not user:
@@ -63,11 +42,11 @@ async def generate_token(form_data: OAuth2PasswordRequestForm = Depends(), db: S
 
 
 @app.get("/api/users/my-profile")
-async def get_user(user: schemas.User = Depends(get_user_by_token)):
+async def get_user(user: schemas.User = Depends(services.get_user_by_token)):
     return user
 
 @app.post("/api/youtube-videos")
-async def get_youtube_videos(search_params: dict, user: schemas.User = Depends(get_user_by_token)):
+async def get_youtube_videos(search_params: dict, user: schemas.User = Depends(services.get_user_by_token)):
         
     YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
 
@@ -109,7 +88,7 @@ async def get_youtube_videos(search_params: dict, user: schemas.User = Depends(g
 
 
 @app.post("/api/transcript/{video_id}")
-async def get_video_transcript(video_id: str, user: schemas.User = Depends(get_user_by_token)):
+async def get_video_transcript(video_id: str, user: schemas.User = Depends(services.get_user_by_token)):
 
     transcript = YouTubeTranscriptApi.get_transcript(video_id)
     formatter = TextFormatter()
@@ -122,7 +101,7 @@ async def get_video_transcript(video_id: str, user: schemas.User = Depends(get_u
 
 
 @app.post("/api/summarize-transcript")
-async def generate_summaries(transcript: schemas.Transcript, user: schemas.User = Depends(get_user_by_token)):
+async def generate_summaries(transcript: schemas.Transcript, user: schemas.User = Depends(services.get_user_by_token)):
 
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
@@ -181,7 +160,7 @@ async def generate_summaries(transcript: schemas.Transcript, user: schemas.User 
 
 
 @app.post("/api/publish-medium")
-async def publish_summaries(summary: schemas.Summary, user: schemas.User = Depends(get_user_by_token)):
+async def publish_summaries(summary: schemas.Summary, user: schemas.User = Depends(services.get_user_by_token)):
 
     MEDIUM_ID = os.getenv("MEDIUM_ID")
     MEDIUM_TOKEN = os.getenv("MEDIUM_TOKEN")

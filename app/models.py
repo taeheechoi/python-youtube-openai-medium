@@ -1,5 +1,6 @@
-from sqlalchemy import Column, Integer, String
 from passlib.context import CryptContext
+from sqlalchemy import Column, Integer, String
+
 from .database import Base
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")

@@ -5,3 +5,5 @@
 - https://fastapi.tiangolo.com/tutorial/security/oauth2-jwt/
 - https://testdriven.io/blog/fastapi-crud/
 - https://towardsdatascience.com/fastapi-cloud-database-loading-with-python-1f531f1d438a
+- https://medium.com/fintechexplained/how-this-python-script-generates-me-income-daily-63bfbab6596c
+- https://platform.openai.com/tokenizer

@@ -93,6 +93,15 @@ async def get_video_transcript(video_id: str, user: schemas.User = Depends(servi
     transcript = YouTubeTranscriptApi.get_transcript(video_id)
     formatter = TextFormatter()
     formatted_transcript = formatter.format_transcript(transcript)
+    
+    def remove_bracket_content(text):
+        import re
+        pattern = r'\[.*?\]'  # Regular expression pattern to match content within square brackets
+        clean_text = re.sub(pattern, '', text)  # Replace the matched patterns with an empty string
+        clean_text = re.sub(r'\n+', ' ', clean_text) 
+        return clean_text
+    
+    formatted_transcript = remove_bracket_content(formatted_transcript)
 
     return {
         "video_id": video_id,
@@ -160,14 +169,14 @@ async def generate_summaries(transcript: schemas.Transcript, user: schemas.User 
 
 
 @app.post("/api/publish-medium")
-async def publish_summaries(summary: schemas.Summary, user: schemas.User = Depends(services.get_user_by_token)):
+async def publish_summaries(data: schemas.Summary, user: schemas.User = Depends(services.get_user_by_token)):
 
     MEDIUM_ID = os.getenv("MEDIUM_ID")
     MEDIUM_TOKEN = os.getenv("MEDIUM_TOKEN")
 
     MEDIUM_URL = f"https://api.medium.com/v1/users/{MEDIUM_ID}/posts"
 
-    content = f"{summary}"
+    content = data.summary
 
     headers = {
         "Content-Type": "application/json",

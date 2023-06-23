@@ -161,3 +161,5 @@ cython_debug/
 
 archieve/
 .vscode/settings.json
+app/text_file.txt
+app/keywords_generator.py
